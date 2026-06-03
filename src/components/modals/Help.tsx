@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import { css } from '../../../styled-system/css'
 import { Tab } from '../../@types/Tab'
@@ -333,6 +333,8 @@ const ModalHelp = () => {
   const [section, setSection] = useState(Section.CommandLibrary)
   const fontSize = useSelector(state => state.fontSize)
   const showDot = useSelector(state => !state.storageCache?.tutorialComplete)
+  const contentRef = useRef<HTMLDivElement>(null)
+
   const tabs: Tab<Section>[] = useMemo(
     () => [
       {
@@ -360,15 +362,35 @@ const ModalHelp = () => {
     [showDot],
   )
 
+  /** Dismisses the keyboard when the user scrolls within the modal. */
+  const handleScroll = () => {
+    const activeElement = document.activeElement
+    if (activeElement && activeElement instanceof HTMLInputElement) {
+      activeElement.blur()
+    }
+  }
+
+  useEffect(() => {
+    const contentElement = contentRef.current
+    if (!contentElement) return
+
+    contentElement.addEventListener('scroll', handleScroll)
+    return () => {
+      contentElement.removeEventListener('scroll', handleScroll)
+    }
+  }, [])
+
   return (
-    <ModalComponent
-      id='help'
-      title='Help'
-      actions={({ close }) => <ActionButton key='close' title='Close' {...fastClick(() => close())} />}
-      style={{ fontSize, paddingInline: 0 }}
-    >
-      <Tabs currentTab={section} onTabChange={setSection} tabs={tabs} />
-    </ModalComponent>
+    <div ref={contentRef} className={css({ overflowY: 'auto', maxHeight: '100%' })}>
+      <ModalComponent
+        id='help'
+        title='Help'
+        actions={({ close }) => <ActionButton key='close' title='Close' {...fastClick(() => close())} />}
+        style={{ fontSize, paddingInline: 0 }}
+      >
+        <Tabs currentTab={section} onTabChange={setSection} tabs={tabs} />
+      </ModalComponent>
+    </div>
   )
 }
 
