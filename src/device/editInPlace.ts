@@ -38,32 +38,86 @@ const parse = (html: string): DocumentFragment | null => {
   return template.innerHTML === html ? template.content : null
 }
 
-/** Changes an editable to the given HTML by changing its existing text nodes character by character. Replacing a
- * character with insertData followed by deleteData leaves every boundary of a live range where it was, whereas
- * assigning a text node's data collapses it. Only possible when the new HTML differs from the editable's only in
- * characters, with the same markup and the same length for each text node, which is what a letter case change usually
- * produces. Returns false, without changing anything, otherwise, e.g. when 'ß' becomes 'SS'. */
+/** Returns the text nodes under a node that hold any text. The editable can have more text nodes than the HTML it
+ * serializes to, since replaceMarkupInPlace leaves the selection's boundaries in empty text nodes on either side of the
+ * new markup, and they add nothing to innerHTML. */
+const nonEmptyTextNodes = (root: Node): Text[] => textNodes(root).filter(node => node.length > 0)
+
+/** Returns the length of the longest common prefix of two strings, in UTF-16 code units. */
+const commonPrefixLength = (a: string, b: string): number => {
+  const max = Math.min(a.length, b.length)
+  let i = 0
+  while (i < max && a[i] === b[i]) i++
+  return i
+}
+
+/** Returns the length of the longest common suffix of two strings that starts at or after the given index of each, in
+ * UTF-16 code units. */
+const commonSuffixLength = (a: string, b: string, from: number): number => {
+  const max = Math.min(a.length, b.length) - from
+  let i = 0
+  while (i < max && a[a.length - 1 - i] === b[b.length - 1 - i]) i++
+  return i
+}
+
+/** Changes an editable to the given HTML by changing the characters of its existing text nodes. In each text node the
+ * changed characters are replaced with insertData followed by deleteData, which leaves every boundary of a live range
+ * around the changed text where it was, whereas assigning a text node's data collapses it. The changed text can change
+ * length, e.g. when 'ß' becomes 'SS'. Only possible when the new HTML differs from the editable's only in the text of
+ * its text nodes, with the same markup, which is what a letter case change produces. Returns false, without changing
+ * anything, otherwise. */
 export const replaceTextInPlace = (editable: HTMLElement, html: string): boolean => {
   const fragment = parse(html)
   if (!fragment) return false
   const newNodes = textNodes(fragment)
-  const liveNodes = textNodes(editable)
-  if (liveNodes.length !== newNodes.length || liveNodes.some((node, i) => node.length !== newNodes[i].length)) {
+  const liveNodes = nonEmptyTextNodes(editable)
+  if (liveNodes.length !== newNodes.length) return false
+
+  const clone = editable.cloneNode(true) as HTMLElement
+  nonEmptyTextNodes(clone).forEach((node, i) => (node.data = newNodes[i].data))
+  if (clone.innerHTML !== html) return false
+
+  // The changed text of each node, as the length of the unchanged text before and after it.
+  const changes = liveNodes.map((node, i) => {
+    const oldData = node.data
+    const newData = newNodes[i].data
+    const prefix = commonPrefixLength(oldData, newData)
+    const suffix = commonSuffixLength(oldData, newData, prefix)
+    return {
+      prefix,
+      oldLength: oldData.length - prefix - suffix,
+      newText: newData.slice(prefix, newData.length - suffix),
+    }
+  })
+
+  // Text inserted where nothing is removed would go in at a point where a boundary of the selection may sit, and
+  // insertData leaves a boundary at the insertion point before the inserted text, so the selection could lose it.
+  if (changes.some(change => change.oldLength === 0 && change.newText.length > 0)) return false
+
+  // A boundary strictly inside the changed text would be moved to its end by deleteData, so the selection would no
+  // longer cover the same text. A letter case change only changes the selected text, so this happens only when the new
+  // HTML differs in more than letter case, e.g. when Editable has trimmed trailing whitespace from the value.
+  const range = selection.boundaries()
+  /** Returns true if the given boundary is strictly inside the changed text of one of the text nodes. */
+  const isInsideChange = (container: Node | undefined, offset: number): boolean =>
+    liveNodes.some(
+      (node, i) =>
+        node === container && offset > changes[i].prefix && offset < changes[i].prefix + changes[i].oldLength,
+    )
+  if (
+    range &&
+    (isInsideChange(range.startContainer, range.startOffset) || isInsideChange(range.endContainer, range.endOffset))
+  ) {
     return false
   }
 
-  const clone = editable.cloneNode(true) as HTMLElement
-  textNodes(clone).forEach((node, i) => (node.data = newNodes[i].data))
-  if (clone.innerHTML !== html) return false
-
   liveNodes.forEach((node, i) => {
-    const newData = newNodes[i].data
-    Array.from({ length: newData.length }, (_, offset) => offset)
-      .filter(offset => node.data[offset] !== newData[offset])
-      .forEach(offset => {
-        node.insertData(offset, newData[offset])
-        node.deleteData(offset + 1, 1)
-      })
+    const { prefix, oldLength, newText } = changes[i]
+    if (oldLength === 0) return
+    // Inserting before deleting keeps a boundary that sits after the changed text after it, rather than moving it to
+    // where the text was deleted from, where the insertion would then leave it before the new text.
+    node.insertData(prefix, newText)
+    node.deleteData(prefix + newText.length, oldLength)
   })
 
   return true

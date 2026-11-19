@@ -132,6 +132,45 @@ it('letter-cases the selected text in place without replacing it', async () => {
   expect(await selectedRange.evaluate(range => range.toString())).toBe('BEAUTIFUL')
 })
 
+// https://github.com/cybersemics/em/pull/5642#pullrequestreview-5812314229
+it('letter-cases a word in place right after it was made bold', async () => {
+  await paste('Welcome to the world of beautiful people')
+
+  await clickThought('Welcome to the world of beautiful people')
+  await setSelection(24, 33)
+
+  // Bold keeps the selection by leaving its boundaries in empty text nodes on either side of the new <b>, so the
+  // letter case that follows has to rewrite the text in place with those empty text nodes still in the editable.
+  await clickToolbar('Bold')
+  await page.waitForFunction(() =>
+    document.querySelector('[data-editing=true] [data-editable]')?.innerHTML.includes('<b>beautiful</b>'),
+  )
+
+  const selectedRange = await page.evaluateHandle(() => window.getSelection()!.getRangeAt(0).cloneRange())
+
+  await clickToolbar('Letter Case', 'UpperCase')
+
+  await waitForEditable('Welcome to the world of <b>BEAUTIFUL</b> people')
+
+  expect(await selectedRange.evaluate(range => range.toString())).toBe('BEAUTIFUL')
+})
+
+// https://github.com/cybersemics/em/pull/5642#pullrequestreview-5812314229
+it('letter-cases the selected text in place when the letter case changes its length', async () => {
+  await paste('Take a walk down the straße today.')
+
+  await clickThought('Take a walk down the straße today.')
+  await setSelection(21, 27)
+
+  const selectedRange = await page.evaluateHandle(() => window.getSelection()!.getRangeAt(0).cloneRange())
+
+  await clickToolbar('Letter Case', 'UpperCase')
+
+  await waitForEditable('Take a walk down the STRASSE today.')
+
+  expect(await selectedRange.evaluate(range => range.toString())).toBe('STRASSE')
+})
+
 it('the selected text remains selected when the thought has trailing whitespace', async () => {
   // Typed rather than pasted: Editable trims the value on its way into Redux while the live editable keeps the
   // trailing space, so the text the editable re-renders to is not the text the DOM had before the edit.
